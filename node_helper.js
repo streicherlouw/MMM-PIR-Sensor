@@ -8,8 +8,66 @@
 */
 
 const NodeHelper = require('node_helper');
-const Gpio = require('onoff').Gpio;
 const exec = require('child_process').exec;
+const execFileSync = require('child_process').execFileSync;
+
+class Gpio {
+    constructor(pin, direction) {
+        this.pin = Number(pin);
+        this.direction = direction;
+        this.watchTimer = null;
+        this.lastValue = direction === 'in' ? this.readSync() : 0;
+    }
+
+    readSync() {
+        const value = execFileSync('/usr/bin/gpioget', [
+            '-c',
+            'gpiochip0',
+            '--numeric',
+            String(this.pin)
+        ], {
+            encoding: 'utf8',
+            timeout: 1000
+        }).trim();
+        return Number(value) || 0;
+    }
+
+    writeSync(value) {
+        execFileSync('/usr/bin/gpioset', [
+            '-c',
+            'gpiochip0',
+            '--daemonize',
+            `${this.pin}=${Number(value) ? 1 : 0}`
+        ], {
+            timeout: 1000
+        });
+    }
+
+    watch(callback) {
+        if (this.direction !== 'in') {
+            return;
+        }
+
+        this.watchTimer = setInterval(() => {
+            try {
+                const value = this.readSync();
+                if (value !== this.lastValue) {
+                    this.lastValue = value;
+                    callback(null, value);
+                }
+            } catch (error) {
+                callback(error);
+            }
+        }, 250);
+    }
+
+    unwatchAll() {
+        if (this.watchTimer) {
+            clearInterval(this.watchTimer);
+            this.watchTimer = null;
+        }
+    }
+}
 
 module.exports = NodeHelper.create({
     start: function () {
@@ -17,6 +75,11 @@ module.exports = NodeHelper.create({
     },
 
     activateMonitor: function () {
+        if (!this.isActiveHour()) {
+            this.deactivateMonitor();
+            return;
+        }
+
         // If always-off is enabled, keep monitor deactivated
         let alwaysOffTrigger = this.alwaysOff && (this.alwaysOff.readSync() === this.config.alwaysOffState)
         if (alwaysOffTrigger) {
@@ -27,6 +90,8 @@ module.exports = NodeHelper.create({
             this.relay.writeSync(this.config.relayState);
         }
         else if (this.config.relayPin === false) {
+            this.setWaylandDisplayPower(true);
+
             // Check if hdmi output is already on
             const self = this;
             exec("/usr/bin/vcgencmd display_power").stdout.on('data', function(data) {
@@ -56,6 +121,8 @@ module.exports = NodeHelper.create({
             this.relay.writeSync((this.config.relayState + 1) % 2);
         }
         else if (this.config.relayPin === false) {
+            this.setWaylandDisplayPower(false);
+
 	    if (this.config.supportCEC)
 	        exec("echo 'standby 0' | cec-client -s -d 1");
             exec("/usr/bin/vcgencmd display_power 0", null);
@@ -65,7 +132,41 @@ module.exports = NodeHelper.create({
 	    self.briefHDMIWakeupInterval = setInterval(function() {
                 self.briefHDMIWakeup();
         	}, self.config.preventHDMITimeout * 1000 * 60);
-	}
+        }
+    },
+
+    isActiveHour: function () {
+        const currentHour = new Date().getHours();
+        const notBeforeHour = this.config.notBeforeHour;
+        const notAfterHour = this.config.notAfterHour;
+
+        if (notBeforeHour !== false && currentHour < Number(notBeforeHour)) {
+            return false;
+        }
+
+        if (notAfterHour !== false && currentHour >= Number(notAfterHour)) {
+            return false;
+        }
+
+        return true;
+    },
+
+    setWaylandDisplayPower: function (enabled) {
+        const output = this.config.waylandOutput || 'HDMI-A-1';
+        // Orientation belongs to the OS monitor profile, including after wake.
+        const args = enabled
+            ? `--output ${output} --on`
+            : `--output ${output} --off`;
+        const env = Object.assign({}, process.env, {
+            XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`,
+            WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY || 'wayland-0'
+        });
+
+        exec(`/usr/bin/wlr-randr ${args}`, { env }, function(error) {
+            if (error) {
+                console.error(`MMM-PIR-Sensor wlr-randr failed: ${error.message}`);
+            }
+        });
     },
 
     briefHDMIWakeup: function() {
@@ -147,9 +248,13 @@ module.exports = NodeHelper.create({
                 })
             }
 	    else {
-                exec("/usr/bin/vcgencmd display_power 1", null);  // Mirror could have stopped with HDMI off. Reset at startup
-	        if (this.config.supportCEC)
-    	            exec("echo 'on o' | cec-client -s -d 1");
+                if (this.isActiveHour()) {
+                    exec("/usr/bin/vcgencmd display_power 1", null);  // Mirror could have stopped with HDMI off. Reset at startup
+	            if (this.config.supportCEC)
+                        exec("echo 'on o' | cec-client -s -d 1");
+                } else {
+                    this.deactivateMonitor();
+                }
 	    }
 
             // Setup for sensor pin

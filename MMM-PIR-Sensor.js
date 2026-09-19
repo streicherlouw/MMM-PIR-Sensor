@@ -22,6 +22,9 @@ Module.register('MMM-PIR-Sensor',{
 		powerSavingDelay: 0,
 		powerSavingNotification: false,
 		powerSavingMessage: "Monitor will be turn Off by PIR module",
+		notBeforeHour: false,
+		notAfterHour: false,
+		waylandOutput: "HDMI-A-1",
 		presenceIndicator: "fa-bullseye",
 		presenceIndicatorColor: "red",
 		presenceOffIndicator: null,
@@ -62,7 +65,9 @@ Module.register('MMM-PIR-Sensor',{
 			if  (payload === false && this.config.powerSavingNotification === true){
 				this.sendNotification("SHOW_ALERT",{type:"notification", message:this.config.powerSavingMessage});
 			}
-			this.updateDom();
+			if (this.config.presenceIndicator || this.config.presenceOffIndicator) {
+				this.updateDom();
+			}
 		} else if (notification === 'SHOW_ALERT') {
 			this.sendNotification(notification, payload)
 		}

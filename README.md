@@ -1,12 +1,38 @@
 # MMM-PIR-Sensor
 This an extension for the [MagicMirror](https://github.com/MichMich/MagicMirror). It can monitor a [PIR motion](http://www.amazon.com/2013newestseller-HC-SR501-Pyroelectric-Infrared-Detector/dp/B00FDPO9B8) sensor and put your mirror to sleep if nobody uses it by turning off HDMI output or by turning off the mirror via a relay.
 
-## Installation
-1. Navigate into your MagicMirror's `modules` folder and execute `git clone https://github.com/paviro/MMM-PIR-Sensor.git`. A new folder will appear navigate into it.
-2. Execute `npm install` to install the node dependencies.
-3. Add your user (`pi`?) to the `gpio group` by executing `sudo usermod -a -G gpio pi`.
-4. Execute `sudo chmod u+s /opt/vc/bin/tvservice && sudo chmod u+s /bin/chvt` to allow turning on/off the hdmi output.
-5. Reboot your Pi.
+## Raspberry Pi OS / Wayland fork
+
+This fork records the deployed HomeScreen changes: GPIO access through libgpiod command-line tools, Wayland monitor power control, optional active hours, and avoiding DOM redraws when both presence indicators are disabled.
+
+Screen orientation belongs to Raspberry Pi OS. The module calls `wlr-randr` with only `--on` or `--off`; it never sets a transform. The former `waylandTransform` setting is ignored and should be removed from existing configurations. It previously forced the display to 270 degrees whenever the monitor woke, including during MagicMirror startup.
+
+## Installation on Raspberry Pi OS with labwc
+
+1. Install the system tools: `sudo apt install gpiod wlr-randr`. The GPIO implementation requires libgpiod 2.x command syntax (`gpioget -c gpiochip0 --numeric`). Check `gpioget --version` before installing on an older OS.
+2. In `~/MagicMirror/modules`, run `git clone https://github.com/streicherlouw/MMM-PIR-Sensor.git` and then `cd MMM-PIR-Sensor`.
+3. Run `npm ci --ignore-scripts`. The deployed package manifest retains legacy native dependencies, but this GPIO implementation uses system tools and does not need the old Electron rebuild script.
+4. Add the MagicMirror user to the GPIO group: `sudo usermod -a -G gpio pi`, then log out and back in (or reboot).
+5. Configure the module below. Run MagicMirror as the desktop user in the Wayland session. The helper inherits `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`, defaulting to `/run/user/<uid>` and `wayland-0`.
+6. Configure screen orientation using Raspberry Pi OS display settings. On the tested labwc installation, the desktop profile is `~/.config/kanshi/config` and the login-screen profile is `/etc/xdg/labwc-greeter/config.kanshi`; keep their orientations consistent. Paths may differ on other desktop setups.
+
+For upgrades, back up local modifications, run `git pull --ff-only`, and restart MagicMirror (`pm2 restart MagicMirror` if that is your PM2 process name). A deployment whose `origin` still points to `paviro/MMM-PIR-Sensor` must switch to this fork before pulling. Do not discard uncommitted deployment changes to force an update.
+
+The tested HomeScreen portrait profile uses `transform 90`, which is a 180-degree turn from its previous `270` profile. Choose the absolute orientation appropriate to your own mounting. Restart MagicMirror and test a motion-triggered wake to confirm both retain the OS orientation.
+
+### Additional configuration
+
+| Option | Default | Behavior |
+| --- | --- | --- |
+| `waylandOutput` | `"HDMI-A-1"` | Output name reported by `wlr-randr` |
+| `notBeforeHour` | `false` | Earliest permitted activation hour, inclusive, in host local time |
+| `notAfterHour` | `false` | Latest permitted activation hour, exclusive, in host local time |
+
+For example, `notBeforeHour: 7` and `notAfterHour: 23` allow activation from 07:00 until 23:00. These are same-day hour bounds, not an overnight scheduler; the checks occur during startup and activation, rather than at an exact scheduled cutoff.
+
+### Validation
+
+Run `npm test` for JavaScript syntax checks and a hardware-free regression test confirming that monitor wake/sleep never requests rotation, even when an old `waylandTransform` value remains in configuration. The deployed fix was also checked by restarting MagicMirror and confirming that the Wayland output retained its OS transform.
 
 ## Using the module
 
